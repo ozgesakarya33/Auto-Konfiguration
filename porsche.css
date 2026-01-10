@@ -201,7 +201,7 @@ ul {
     margin-bottom: 2rem;
 }
 
-p {
+p, table {
     color: white;
 }
 
