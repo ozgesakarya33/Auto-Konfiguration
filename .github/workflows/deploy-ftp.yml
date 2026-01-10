@@ -1,0 +1,88 @@
+name: Deploy static site to FTP (changed files only)
+
+on:
+  pull_request:
+    branches: [ master ]
+    types: [ closed ]
+
+jobs:
+  deploy:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute changed files in this PR
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Base and head SHAs from the PR event payload
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.merge_commit_sha || github.event.pull_request.head.sha }}"
+
+          echo "BASE_SHA=$BASE_SHA"
+          echo "HEAD_SHA=$HEAD_SHA"
+
+          # List changed files (added/modified/renamed). Exclude deletions.
+          git diff --name-only --diff-filter=AMR "$BASE_SHA" "$HEAD_SHA" > changed_files.txt
+
+          # Remove stuff you never want to upload
+          grep -vE '^(\.github/|\.gitignore$|README\.md$)' changed_files.txt > upload_files.txt || true
+
+          echo "Changed files to upload:"
+          cat upload_files.txt || true
+
+          # Output whether we have any files to upload
+          if [ -s upload_files.txt ]; then
+            echo "has_files=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_files=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload changed files via FTP
+        if: steps.changes.outputs.has_files == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y lftp
+
+          # Build an lftp script that creates dirs and uploads files
+          REMOTE_DIR="${{ secrets.FTP_REMOTE_DIR }}"
+          HOST="${{ secrets.FTP_HOST }}"
+          USER="${{ secrets.FTP_USERNAME }}"
+          PASS="${{ secrets.FTP_PASSWORD }}"
+
+          echo "open -u \"$USER\",\"$PASS\" \"$HOST\"" > lftp_script.txt
+          echo "set ssl:verify-certificate no" >> lftp_script.txt
+          echo "set net:max-retries 2" >> lftp_script.txt
+          echo "set net:timeout 20" >> lftp_script.txt
+
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            dir="$(dirname "$file")"
+
+            # Create remote directory tree (ignore errors if exists)
+            if [ "$dir" != "." ]; then
+              echo "mkdir -p \"$REMOTE_DIR/$dir\"; cd \"$REMOTE_DIR\"" >> lftp_script.txt
+            else
+              echo "cd \"$REMOTE_DIR\"" >> lftp_script.txt
+            fi
+
+            # Upload the file
+            echo "put -O \"$REMOTE_DIR/$dir\" \"$file\"" >> lftp_script.txt
+          done < upload_files.txt
+
+          echo "bye" >> lftp_script.txt
+
+          lftp -f lftp_script.txt
+
+      - name: Skip (no changed files)
+        if: steps.changes.outputs.has_files != 'true'
+        run: echo "No relevant changed files to upload."
