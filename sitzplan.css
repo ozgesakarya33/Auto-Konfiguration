@@ -1,0 +1,31 @@
+.seatplan {
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+    width: 15rem;
+    margin-bottom: 1rem;
+}
+
+.seat-group {
+    display: flex;
+    flex-direction: row;
+    gap: .5rem;
+    flex-wrap: wrap;
+
+}
+.seat {
+    width: 1rem;
+    height: 1rem;
+}
+
+.seat.vip {
+background-color: rgb(67, 154, 228);
+}
+
+.seat.regular {
+background-color: rgb(228, 161, 67);
+}
+
+.seat.standing {
+background-color: rgb(28, 220, 115);
+}
