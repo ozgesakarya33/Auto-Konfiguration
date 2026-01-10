@@ -1,4 +1,4 @@
-name: Deploy static site to FTP (changed files only)
+name: Deploy static site to FTP (changed files + deletions)
 
 on:
   pull_request:
@@ -16,73 +16,119 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Compute changed files in this PR
+      - name: Compute changed + deleted files in this PR
         id: changes
         shell: bash
         run: |
           set -euo pipefail
 
-          # Base and head SHAs from the PR event payload
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.merge_commit_sha || github.event.pull_request.head.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.merge_commit_sha }}"
+          if [ -z "$HEAD_SHA" ] || [ "$HEAD_SHA" = "null" ]; then
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          fi
 
           echo "BASE_SHA=$BASE_SHA"
           echo "HEAD_SHA=$HEAD_SHA"
 
-          # List changed files (added/modified/renamed). Exclude deletions.
-          git diff --name-only --diff-filter=AMR "$BASE_SHA" "$HEAD_SHA" > changed_files.txt
+          # name-status output examples:
+          # A    path/file
+          # M    path/file
+          # D    path/file
+          # R100 old/path/file    new/path/file
+          git diff --name-status "$BASE_SHA" "$HEAD_SHA" > name_status.txt
 
-          # Remove stuff you never want to upload
-          grep -vE '^(\.github/|\.gitignore$|README\.md$)' changed_files.txt > upload_files.txt || true
+          # Upload list: Added/Modified + new path of Renames
+          awk '
+            $1 ~ /^A|^M/ {print $2}
+            $1 ~ /^R/ {print $3}
+          ' name_status.txt > upload_files_raw.txt
 
-          echo "Changed files to upload:"
+          # Delete list: Deleted + old path of Renames
+          awk '
+            $1 == "D" {print $2}
+            $1 ~ /^R/ {print $2}
+          ' name_status.txt > delete_files_raw.txt
+
+          # Exclusions (never upload or delete these)
+          EXCLUDE_REGEX='^(\.github/|\.git/|\.git$|README\.md$|\.gitignore$)'
+
+          grep -vE "$EXCLUDE_REGEX" upload_files_raw.txt > upload_files.txt || true
+          grep -vE "$EXCLUDE_REGEX" delete_files_raw.txt > delete_files.txt || true
+
+          echo "Files to upload:"
           cat upload_files.txt || true
+          echo "Files to delete (remote):"
+          cat delete_files.txt || true
 
-          # Output whether we have any files to upload
-          if [ -s upload_files.txt ]; then
-            echo "has_files=true" >> "$GITHUB_OUTPUT"
+          if [ -s upload_files.txt ] || [ -s delete_files.txt ]; then
+            echo "has_work=true" >> "$GITHUB_OUTPUT"
           else
-            echo "has_files=false" >> "$GITHUB_OUTPUT"
+            echo "has_work=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload changed files via FTP
-        if: steps.changes.outputs.has_files == 'true'
+      - name: Apply FTP changes (upload + delete)
+        if: steps.changes.outputs.has_work == 'true'
         shell: bash
         run: |
           set -euo pipefail
+
           sudo apt-get update -y
           sudo apt-get install -y lftp
 
-          # Build an lftp script that creates dirs and uploads files
           REMOTE_DIR="${{ secrets.FTP_REMOTE_DIR }}"
           HOST="${{ secrets.FTP_HOST }}"
           USER="${{ secrets.FTP_USERNAME }}"
           PASS="${{ secrets.FTP_PASSWORD }}"
 
-          echo "open -u \"$USER\",\"$PASS\" \"$HOST\"" > lftp_script.txt
-          echo "set ssl:verify-certificate no" >> lftp_script.txt
-          echo "set net:max-retries 2" >> lftp_script.txt
-          echo "set net:timeout 20" >> lftp_script.txt
+          # Normalize remote dir (strip trailing slash)
+          REMOTE_DIR="${REMOTE_DIR%/}"
 
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            dir="$(dirname "$file")"
+          {
+            echo "set net:max-retries 2"
+            echo "set net:timeout 20"
+            # If your server uses plain FTP, this is okay. If FTPS is used, this avoids cert issues.
+            echo "set ssl:verify-certificate no"
+            echo "open -u \"$USER\",\"$PASS\" \"$HOST\""
+            echo "cd \"$REMOTE_DIR\""
+          } > lftp_script.txt
 
-            # Create remote directory tree (ignore errors if exists)
-            if [ "$dir" != "." ]; then
-              echo "mkdir -p \"$REMOTE_DIR/$dir\"; cd \"$REMOTE_DIR\"" >> lftp_script.txt
-            else
-              echo "cd \"$REMOTE_DIR\"" >> lftp_script.txt
-            fi
+          # 1) Delete remote files that were deleted/renamed
+          if [ -s delete_files.txt ]; then
+            while IFS= read -r file; do
+              [ -z "$file" ] && continue
+              # Ensure path is relative (safety)
+              case "$file" in
+                /*) echo "Skipping suspicious absolute path: $file" >&2; continue ;;
+              esac
+              echo "rm -f \"$REMOTE_DIR/$file\"" >> lftp_script.txt
+            done < delete_files.txt
+          fi
 
-            # Upload the file
-            echo "put -O \"$REMOTE_DIR/$dir\" \"$file\"" >> lftp_script.txt
-          done < upload_files.txt
+          # 2) Upload changed files
+          if [ -s upload_files.txt ]; then
+            while IFS= read -r file; do
+              [ -z "$file" ] && continue
+              [ ! -f "$file" ] && continue
+
+              dir="$(dirname "$file")"
+              base="$(basename "$file")"
+
+              if [ "$dir" = "." ]; then
+                remote_path="$REMOTE_DIR"
+              else
+                remote_path="$REMOTE_DIR/$dir"
+                echo "mkdir -p \"$remote_path\"" >> lftp_script.txt
+              fi
+
+              echo "put \"$file\" -o \"$remote_path/$base\"" >> lftp_script.txt
+            done < upload_files.txt
+          fi
 
           echo "bye" >> lftp_script.txt
 
           lftp -f lftp_script.txt
 
-      - name: Skip (no changed files)
-        if: steps.changes.outputs.has_files != 'true'
-        run: echo "No relevant changed files to upload."
+      - name: Skip (no changes)
+        if: steps.changes.outputs.has_work != 'true'
+        run: echo "No relevant changes to upload or delete."
