@@ -2,7 +2,7 @@ name: Deploy static site to FTP (changed files only)
 
 on:
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
     types: [ closed ]
 
 jobs:
