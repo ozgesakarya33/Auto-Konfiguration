@@ -38,3 +38,20 @@ background-color: rgb(28, 220, 115);
     background-color: beige;
    box-shadow: inset 0 0 3px rgb(226, 72, 169);
 }
+
+.legende li {
+    display: flex;
+    gap: .5rem;
+    align-items: center;
+}
+
+.legende .seat {
+cursor: default;
+}
+.legende .seat:active {
+transform: none;
+}
+
+.sitzplan-position {
+    display: flex;
+}

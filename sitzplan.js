@@ -1,6 +1,5 @@
 /**
  * TODO:
- *  legende
  *  preisrechnung
  *  zufällige ausverkaufte sitze
  *  download funktion
