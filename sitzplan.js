@@ -1,6 +1,5 @@
 /**
  * TODO:
- *  sitzpläne auswählen
  *  legende
  *  preisrechnung
  *  zufällige ausverkaufte sitze
@@ -13,6 +12,7 @@
     const createSeat = (seatType) => {
         const seat = document.createElement("div");
         seat.classList.add("seat", seatType);
+        seat.addEventListener("click", toggleSelection);
         return seat;
 
     }
@@ -23,20 +23,27 @@
             seatGroup.appendChild(seat);
         }
     }
+    function toggleSelection () {
+       const isSelected = this.classList.contains("selected")
+       if (isSelected){
+        this.classList.remove("selected")
+       }
+       else{
+        this.classList.add("selected")
+       }
+    }
+
+
     const init = () => {
         const groups = [
-            { groupType: "vip", seatCount:20 },
-            { groupType: "regular", seatCount:50 },
-            { groupType: "standing", seatCount:40 }
+            { groupType: "vip", seatCount: 20 },
+            { groupType: "regular", seatCount: 50 },
+            { groupType: "standing", seatCount: 40 }
         ]
 
         groups.forEach((group) => {
-            createSeatGroup(group.groupType,group.seatCount);
-        })
-
-
-
-
+            createSeatGroup(group.groupType, group.seatCount);
+        });
 
 
     }
